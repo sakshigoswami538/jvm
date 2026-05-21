@@ -99,7 +99,8 @@ data:
   KAFKA_BOOTSTRAP_SERVERS: "<kafka-host>:9092"
 
   # ── MinIO ───────────────────────────────────────────────────────────────────
-  MINIO_ENDPOINT: "http://<minio-host>:9000"
+  # Set the full URL including scheme, e.g. "http://172.168.1.217:30090"
+  MINIO_ENDPOINT: "http://<ip>:<nodeport>"
   MINIO_BUCKET_NAME: "music"
 
   # ── OTel Collector ──────────────────────────────────────────────────────────

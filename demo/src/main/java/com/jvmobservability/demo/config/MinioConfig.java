@@ -29,8 +29,16 @@ public class MinioConfig {
 
     @Bean
     public MinioClient minioClient() {
+        // Guard against a doubled scheme (e.g. "http://http://host:port") that
+        // occurs when the env var already contains "http://" and the YAML template
+        // also had "http://" baked in, resulting in an invalid URL that MinioClient
+        // rejects with "no path allowed in endpoint".
+        String url = endpoint;
+        if (url.startsWith("http://http://"))  url = url.substring("http://".length());
+        if (url.startsWith("https://https://")) url = url.substring("https://".length());
+
         return MinioClient.builder()
-                .endpoint(endpoint)
+                .endpoint(url)
                 .credentials(accessKey, secretKey)
                 .build();
     }
