@@ -88,19 +88,43 @@ metadata:
   labels:
     app: jvmobservability
 data:
-  # Elasticsearch
+  # ── Server ──────────────────────────────────────────────────────────────────
+  SERVER_PORT: "8080"
+
+  # ── Elasticsearch ───────────────────────────────────────────────────────────
   SPRING_ELASTICSEARCH_URIS: "http://<elasticsearch-host>:9200"
   ELASTICSEARCH_URL: "http://<elasticsearch-host>:9200"
 
-  # Kafka — use port 9092 (external listener) since OCP pods are outside Docker network
+  # ── Kafka — port 9092 (external listener; OCP pods are outside Docker network)
   KAFKA_BOOTSTRAP_SERVERS: "<kafka-host>:9092"
 
-  # MinIO
+  # ── MinIO ───────────────────────────────────────────────────────────────────
   MINIO_ENDPOINT: "http://<minio-host>:9000"
   MINIO_BUCKET_NAME: "music"
 
-  # OTel Collector OTLP/HTTP receiver
+  # ── OTel Collector ──────────────────────────────────────────────────────────
+  OTLP_ENABLED: "true"
   MANAGEMENT_OTLP_METRICS_EXPORT_URL: "http://<otel-host>:4318/v1/metrics"
+
+  # ── OTel resource attributes (identify this pod in Kibana / Grafana) ────────
+  SERVICE_NAME: "jvmobservability"
+  SERVICE_VERSION: "0.0.1"
+  DEPLOYMENT_ENVIRONMENT: "production"
+
+  # ── Thread pool (tune for OCP pod resource limits) ─────────────────────────
+  TASK_POOL_CORE_SIZE: "10"
+  TASK_POOL_MAX_SIZE: "30"
+  TASK_POOL_QUEUE_CAPACITY: "100"
+
+  # ── Upload limits ───────────────────────────────────────────────────────────
+  MULTIPART_MAX_FILE_SIZE: "50MB"
+  MULTIPART_MAX_REQUEST_SIZE: "50MB"
+
+  # ── Logging — quieter in production than local dev ──────────────────────────
+  # Local default in application.properties is DEBUG/TRACE (verbose for learning).
+  # OCP overrides to INFO/WARN to avoid log noise in production.
+  LOG_LEVEL_ES: "INFO"
+  LOG_LEVEL_TRACER: "WARN"
 
 ---
 # ─────────────────────────────────────────────────────────────────────────────
