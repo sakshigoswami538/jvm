@@ -1,0 +1,289 @@
+# =============================================================================
+# JVM Observability Service — OpenShift Container Platform (OCP) Manifests
+# =============================================================================
+#
+# Resources created:
+#   Secret      — MongoDB URI, MinIO credentials
+#   ConfigMap   — service endpoints (ES, Kafka, MinIO, OTel Collector)
+#   Deployment  — Spring Boot app (liveness + readiness + startup probes)
+#   Service     — ClusterIP (internal cluster access on port 8080)
+#   Route       — OCP external access with TLS edge termination
+#
+# =============================================================================
+# STEP 1 — Create OCP project
+# =============================================================================
+#   oc new-project jvmobservability
+#
+# =============================================================================
+# STEP 2 — Push your Docker image to OCP internal registry
+# =============================================================================
+#   # Log in to OCP first
+#   oc login -u developer https://<your-ocp-api>:6443
+#
+#   # (CRC users only) expose the registry route
+#   oc patch configs.imageregistry.operator.openshift.io/cluster \
+#     --type merge -p '{"spec":{"defaultRoute":true}}'
+#
+#   # Get the registry hostname
+#   REGISTRY=$(oc get route default-route -n openshift-image-registry \
+#                --template='{{ .spec.host }}')
+#
+#   # Docker login using your OCP token
+#   docker login -u developer -p $(oc whoami -t) $REGISTRY
+#
+#   # Tag and push the image you already built
+#   docker tag jvmobservability:latest $REGISTRY/jvmobservability/jvmobservability:latest
+#   docker push $REGISTRY/jvmobservability/jvmobservability:latest
+#
+# =============================================================================
+# STEP 3 — Fill in the placeholders in ConfigMap below, then apply
+# =============================================================================
+#   oc apply -f jvmobservability-ocp.yml -n jvmobservability
+#
+# =============================================================================
+# STEP 4 — Get the public URL
+# =============================================================================
+#   oc get route jvmobservability -n jvmobservability
+#   # → https://jvmobservability-jvmobservability.apps.<cluster-domain>
+#
+# =============================================================================
+
+---
+# ─────────────────────────────────────────────────────────────────────────────
+# Secret — credentials kept separate from ConfigMap
+# These are base64-encoded at rest by OCP (etcd encryption).
+# stringData lets you write plain values; OCP encodes them automatically.
+# ─────────────────────────────────────────────────────────────────────────────
+apiVersion: v1
+kind: Secret
+metadata:
+  name: jvmobservability-secret
+  labels:
+    app: jvmobservability
+type: Opaque
+stringData:
+  # MongoDB — auth against the admin database
+  mongodb-uri: "mongodb://admin:admin123@<mongo-host>:27017/musicdb?authSource=admin"
+
+  # MinIO credentials
+  minio-access-key: "minioadmin"
+  minio-secret-key: "minioadmin123"
+
+---
+# ─────────────────────────────────────────────────────────────────────────────
+# ConfigMap — non-sensitive configuration
+#
+# Replace every <...> placeholder with the actual host/IP where that service runs.
+#
+# If your Docker stack still runs on your laptop and OCP is CRC:
+#   - Run `crc ip` to get the CRC VM IP (e.g. 192.168.130.11)
+#   - Use that IP as <elasticsearch-host>, <kafka-host>, <minio-host>, <otel-host>
+#
+# If your Docker stack and OCP are on the same node, use the node IP.
+# ─────────────────────────────────────────────────────────────────────────────
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: jvmobservability-config
+  labels:
+    app: jvmobservability
+data:
+  # Elasticsearch
+  SPRING_ELASTICSEARCH_URIS: "http://<elasticsearch-host>:9200"
+  ELASTICSEARCH_URL: "http://<elasticsearch-host>:9200"
+
+  # Kafka — use port 9092 (external listener) since OCP pods are outside Docker network
+  KAFKA_BOOTSTRAP_SERVERS: "<kafka-host>:9092"
+
+  # MinIO
+  MINIO_ENDPOINT: "http://<minio-host>:9000"
+  MINIO_BUCKET_NAME: "music"
+
+  # OTel Collector OTLP/HTTP receiver
+  MANAGEMENT_OTLP_METRICS_EXPORT_URL: "http://<otel-host>:4318/v1/metrics"
+
+---
+# ─────────────────────────────────────────────────────────────────────────────
+# Deployment
+#
+# Probes use Spring Boot Actuator endpoints:
+#   livenessProbe  → /actuator/health/liveness  (only livenessState)
+#   readinessProbe → /actuator/health/readiness (mongo + es + kafka + readinessState)
+#   startupProbe   → same as liveness, gives the JVM time to finish starting
+#
+# Resource limits:
+#   memory limit = 1Gi → JVM MaxRAMPercentage=75% → heap ≈ 768Mi
+#   cpu request   = 250m → guaranteed quarter-core during normal operation
+# ─────────────────────────────────────────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: jvmobservability
+  labels:
+    app: jvmobservability
+    version: "0.0.1"
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: jvmobservability
+  template:
+    metadata:
+      labels:
+        app: jvmobservability
+        version: "0.0.1"
+    spec:
+      containers:
+        - name: jvmobservability
+
+          # Replace with your actual image path after pushing in STEP 2.
+          # Internal registry format:
+          #   image-registry.openshift-image-registry.svc:5000/<namespace>/<name>:<tag>
+          image: image-registry.openshift-image-registry.svc:5000/jvmobservability/jvmobservability:latest
+          imagePullPolicy: Always
+
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+
+          # ── Environment Variables ────────────────────────────────────────
+          # Credentials from Secret
+          env:
+            - name: SPRING_DATA_MONGODB_URI
+              valueFrom:
+                secretKeyRef:
+                  name: jvmobservability-secret
+                  key: mongodb-uri
+
+            - name: MINIO_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: jvmobservability-secret
+                  key: minio-access-key
+
+            - name: MINIO_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: jvmobservability-secret
+                  key: minio-secret-key
+
+          # Non-sensitive config from ConfigMap
+          envFrom:
+            - configMapRef:
+                name: jvmobservability-config
+
+          # ── Resource Limits ──────────────────────────────────────────────
+          resources:
+            requests:
+              memory: "512Mi"
+              cpu: "250m"
+            limits:
+              memory: "1Gi"
+              cpu: "1000m"
+
+          # ── Startup Probe ────────────────────────────────────────────────
+          # Runs FIRST. Gives the JVM up to 150s to finish starting
+          # (30s initial + 12 × 10s = 150s max). Liveness/readiness don't
+          # run until this probe succeeds.
+          # The container took ~55s to start in Docker — 150s gives margin.
+          startupProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            failureThreshold: 12
+            timeoutSeconds: 5
+
+          # ── Liveness Probe ───────────────────────────────────────────────
+          # Only checks LivenessState (CORRECT → 200, BROKEN → 503).
+          # MongoDB / ES DOWN has NO effect here.
+          # OCP restarts the pod on 503.
+          livenessProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: 8080
+            periodSeconds: 10
+            failureThreshold: 3
+            timeoutSeconds: 5
+
+          # ── Readiness Probe ──────────────────────────────────────────────
+          # Checks readinessState + mongo + elasticsearch + kafka.
+          # Any dependency DOWN → 503 → OCP removes pod from Service endpoints
+          # (load balancer stops sending traffic). Pod is NOT restarted.
+          readinessProbe:
+            httpGet:
+              path: /actuator/health/readiness
+              port: 8080
+            periodSeconds: 10
+            failureThreshold: 3
+            timeoutSeconds: 5
+
+          # ── Security Context ─────────────────────────────────────────────
+          # OCP restricted SCC requires non-root, no privilege escalation.
+          # runAsUser is omitted — OCP assigns a UID from the namespace range.
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsNonRoot: true
+            capabilities:
+              drop:
+                - ALL
+            seccompProfile:
+              type: RuntimeDefault
+
+      # Pod-level security context
+      securityContext:
+        runAsNonRoot: true
+
+---
+# ─────────────────────────────────────────────────────────────────────────────
+# Service — exposes the Deployment inside the cluster on port 8080
+# Type ClusterIP: only reachable within OCP (the Route below adds external access)
+# ─────────────────────────────────────────────────────────────────────────────
+apiVersion: v1
+kind: Service
+metadata:
+  name: jvmobservability
+  labels:
+    app: jvmobservability
+spec:
+  selector:
+    app: jvmobservability
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+      protocol: TCP
+  type: ClusterIP
+
+---
+# ─────────────────────────────────────────────────────────────────────────────
+# Route — OCP-specific resource for external HTTP/HTTPS access
+# (equivalent to a Kubernetes Ingress)
+#
+# TLS edge termination:
+#   - OCP terminates TLS at the router (HAProxy)
+#   - Traffic inside the cluster runs plain HTTP (port 8080)
+#   - Clients always hit HTTPS; HTTP is redirected to HTTPS
+#
+# URL pattern after creation:
+#   https://jvmobservability-<namespace>.apps.<cluster-domain>
+# ─────────────────────────────────────────────────────────────────────────────
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: jvmobservability
+  labels:
+    app: jvmobservability
+spec:
+  to:
+    kind: Service
+    name: jvmobservability
+    weight: 100
+  port:
+    targetPort: http
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
+  wildcardPolicy: None

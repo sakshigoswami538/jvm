@@ -1,0 +1,156 @@
+{
+  "title": "OTel — JVM Music Service",
+  "uid": "otel-jvm-music",
+  "schemaVersion": 38,
+  "version": 1,
+  "refresh": "10s",
+  "time": { "from": "now-15m", "to": "now" },
+  "panels": [
+    {
+      "id": 1,
+      "title": "Upload Attempts (total)",
+      "type": "stat",
+      "gridPos": { "x": 0, "y": 0, "w": 4, "h": 4 },
+      "targets": [{
+        "expr": "increase(otel_multipart_upload_total_total[5m])",
+        "legendFormat": "uploads/5m"
+      }],
+      "datasource": "Prometheus"
+    },
+    {
+      "id": 2,
+      "title": "Upload Failures (total)",
+      "type": "stat",
+      "gridPos": { "x": 4, "y": 0, "w": 4, "h": 4 },
+      "targets": [{
+        "expr": "increase(otel_multipart_upload_failures_total[5m])",
+        "legendFormat": "failures/5m"
+      }],
+      "datasource": "Prometheus"
+    },
+    {
+      "id": 3,
+      "title": "Rejected Uploads (429s)",
+      "type": "stat",
+      "gridPos": { "x": 8, "y": 0, "w": 4, "h": 4 },
+      "targets": [{
+        "expr": "increase(otel_upload_rejected_total_total[5m])",
+        "legendFormat": "rejected/5m"
+      }],
+      "datasource": "Prometheus"
+    },
+    {
+      "id": 4,
+      "title": "Upload Semaphore Available Slots",
+      "type": "gauge",
+      "gridPos": { "x": 12, "y": 0, "w": 4, "h": 4 },
+      "options": { "minValue": 0, "maxValue": 50 },
+      "targets": [{
+        "expr": "otel_upload_semaphore_available",
+        "legendFormat": "slots"
+      }],
+      "datasource": "Prometheus"
+    },
+    {
+      "id": 5,
+      "title": "Upload Duration P99 (seconds)",
+      "type": "stat",
+      "gridPos": { "x": 16, "y": 0, "w": 4, "h": 4 },
+      "targets": [{
+        "expr": "histogram_quantile(0.99, rate(otel_file_upload_duration_seconds_bucket[5m]))",
+        "legendFormat": "p99"
+      }],
+      "datasource": "Prometheus"
+    },
+    {
+      "id": 6,
+      "title": "Upload Duration — Heatmap",
+      "type": "timeseries",
+      "gridPos": { "x": 0, "y": 4, "w": 12, "h": 8 },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, rate(otel_file_upload_duration_seconds_bucket[2m]))",
+          "legendFormat": "p50"
+        },
+        {
+          "expr": "histogram_quantile(0.95, rate(otel_file_upload_duration_seconds_bucket[2m]))",
+          "legendFormat": "p95"
+        },
+        {
+          "expr": "histogram_quantile(0.99, rate(otel_file_upload_duration_seconds_bucket[2m]))",
+          "legendFormat": "p99"
+        }
+      ],
+      "datasource": "Prometheus"
+    },
+    {
+      "id": 7,
+      "title": "Upload File Size Distribution (bytes)",
+      "type": "timeseries",
+      "gridPos": { "x": 12, "y": 4, "w": 12, "h": 8 },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, rate(otel_file_upload_size_bytes_bucket[2m]))",
+          "legendFormat": "p50"
+        },
+        {
+          "expr": "histogram_quantile(0.95, rate(otel_file_upload_size_bytes_bucket[2m]))",
+          "legendFormat": "p95"
+        }
+      ],
+      "datasource": "Prometheus"
+    },
+    {
+      "id": 8,
+      "title": "JVM Heap Used (bytes)",
+      "type": "timeseries",
+      "gridPos": { "x": 0, "y": 12, "w": 12, "h": 8 },
+      "targets": [
+        {
+          "expr": "otel_jvm_memory_used_bytes{area=\"heap\"}",
+          "legendFormat": "{{id}}"
+        }
+      ],
+      "datasource": "Prometheus"
+    },
+    {
+      "id": 9,
+      "title": "JVM Threads",
+      "type": "timeseries",
+      "gridPos": { "x": 12, "y": 12, "w": 12, "h": 8 },
+      "targets": [
+        {
+          "expr": "otel_jvm_threads_live_threads",
+          "legendFormat": "live"
+        },
+        {
+          "expr": "otel_jvm_threads_daemon_threads",
+          "legendFormat": "daemon"
+        }
+      ],
+      "datasource": "Prometheus"
+    },
+    {
+      "id": 10,
+      "title": "HTTP Request Rate (via OTel)",
+      "type": "timeseries",
+      "gridPos": { "x": 0, "y": 20, "w": 12, "h": 8 },
+      "targets": [{
+        "expr": "rate(otel_http_server_requests_seconds_count[2m])",
+        "legendFormat": "{{uri}} {{status}}"
+      }],
+      "datasource": "Prometheus"
+    },
+    {
+      "id": 11,
+      "title": "GC Pause Time Rate",
+      "type": "timeseries",
+      "gridPos": { "x": 12, "y": 20, "w": 12, "h": 8 },
+      "targets": [{
+        "expr": "rate(otel_jvm_gc_pause_seconds_sum[2m])",
+        "legendFormat": "{{action}} {{cause}}"
+      }],
+      "datasource": "Prometheus"
+    }
+  ]
+}

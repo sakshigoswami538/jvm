@@ -1,0 +1,27 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+
+  # ── OTel Collector Prometheus endpoint ─────────────────────────────────────
+  # Collects all OTLP metrics pushed by the Spring Boot app
+  - job_name: otel-collector
+    static_configs:
+      - targets: ["otel-collector:8889"]
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance
+        replacement: otel-collector
+
+  # ── Spring Boot Actuator (direct Prometheus scrape) ─────────────────────────
+  # Keeps the existing Prometheus pull path working alongside OTel push
+  # Change host.docker.internal to your machine's LAN IP if needed
+  - job_name: spring-boot-actuator
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets: ["host.docker.internal:8080"]
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance
+        replacement: jvmobservability-app

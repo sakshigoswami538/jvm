@@ -1,0 +1,163 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# JVM Observability Stack — OTel + Elasticsearch Edition
+#
+# Services:
+#   mongodb        :27017   — song metadata store
+#   minio          :9000    — MP3 object storage
+#   elasticsearch  :9200    — metrics store (receives from otel-collector)
+#   kibana         :5601    — dashboards (no login in dev mode)
+#   otel-collector :4317    — OTLP gRPC receiver
+#                  :4318    — OTLP HTTP receiver  ← Spring Boot pushes here
+#                  :8889    — Prometheus scrape endpoint
+#                  :13133   — collector health check
+#   prometheus     :9090    — scrapes otel-collector:8889
+#   grafana        :3000    — dashboards (admin/admin)
+#
+# Start:  docker compose up -d
+# Stop:   docker compose down
+# ─────────────────────────────────────────────────────────────────────────────
+
+services:
+
+  # ── MongoDB ─────────────────────────────────────────────────────────────────
+  mongodb:
+    image: mongo:7
+    container_name: mongodb
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+    networks:
+      - observability
+
+  # ── MinIO ───────────────────────────────────────────────────────────────────
+  minio:
+    image: minio/minio:latest
+    container_name: minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin123
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio_data:/data
+    networks:
+      - observability
+
+  # ── Elasticsearch ────────────────────────────────────────────────────────────
+  # Single-node cluster in development mode (no TLS, no auth).
+  # Receives metric documents from otel-collector via the elasticsearch exporter.
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:9.0.1
+    container_name: elasticsearch
+    environment:
+      - discovery.type=single-node       # no multi-node coordination needed
+      - xpack.security.enabled=false     # disable TLS + auth for local dev
+      - ES_JAVA_OPTS=-Xms512m -Xmx512m  # keep heap bounded
+      - cluster.name=otel-cluster
+      - node.name=otel-node-1
+      # Tune index refresh for time-series write throughput
+      - indices.memory.index_buffer_size=20%
+    ports:
+      - "9200:9200"   # REST API
+      - "9300:9300"   # internal cluster transport (unused in single-node)
+    volumes:
+      - es_data:/usr/share/elasticsearch/data
+    networks:
+      - observability
+    healthcheck:
+      test: ["CMD-SHELL", "curl -s http://localhost:9200/_cluster/health | grep -q '\"status\":\"green\"\\|\"status\":\"yellow\"'"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 60s   # ES takes ~30-45 s to fully start
+
+  # ── Kibana ───────────────────────────────────────────────────────────────────
+  # Visualisation layer — connects to Elasticsearch at :9200.
+  kibana:
+    image: docker.elastic.co/kibana/kibana:9.0.1
+    container_name: kibana
+    environment:
+      - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
+      - xpack.security.enabled=false
+      - telemetry.enabled=false          # opt out of Elastic telemetry
+    ports:
+      - "5601:5601"
+    networks:
+      - observability
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+
+  # ── OpenTelemetry Collector ──────────────────────────────────────────────────
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.103.0
+    container_name: otel-collector
+    command: ["--config=/etc/otel-collector-config.yaml"]
+    volumes:
+      - ./otel-collector-config.yaml:/etc/otel-collector-config.yaml:ro
+    ports:
+      - "4317:4317"    # OTLP gRPC
+      - "4318:4318"    # OTLP HTTP  ← Spring Boot targets this
+      - "8889:8889"    # Prometheus scrape endpoint
+      - "13133:13133"  # Health check
+    networks:
+      - observability
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:13133"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── Prometheus ──────────────────────────────────────────────────────────────
+  prometheus:
+    image: prom/prometheus:v2.52.0
+    container_name: prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.retention.time=7d"
+      - "--web.enable-remote-write-receiver"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    ports:
+      - "9090:9090"
+    networks:
+      - observability
+    depends_on:
+      otel-collector:
+        condition: service_healthy
+
+  # ── Grafana ─────────────────────────────────────────────────────────────────
+  grafana:
+    image: grafana/grafana:11.0.0
+    container_name: grafana
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_PATHS_PROVISIONING: /etc/grafana/provisioning
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+    ports:
+      - "3000:3000"
+    networks:
+      - observability
+    depends_on:
+      - prometheus
+
+volumes:
+  mongo_data:
+  minio_data:
+  es_data:
+  prometheus_data:
+  grafana_data:
+
+networks:
+  observability:
+    driver: bridge

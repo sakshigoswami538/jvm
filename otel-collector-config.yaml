@@ -1,0 +1,89 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# OpenTelemetry Collector configuration
+#
+# Data flow:
+#   Spring Boot (OTLP/HTTP :4318)
+#     → [receivers: otlp]
+#     → [processors: memory_limiter → batch]
+#     → [exporters: prometheus :8889  +  elasticsearch :9200]
+# ─────────────────────────────────────────────────────────────────────────────
+
+receivers:
+  # OTLP receiver — accepts metrics pushed by Spring Boot via OTLP/HTTP and gRPC
+  otlp:
+    protocols:
+      http:
+        endpoint: 0.0.0.0:4318   # Spring Boot pushes here
+      grpc:
+        endpoint: 0.0.0.0:4317   # optional gRPC endpoint
+
+processors:
+  # Memory limiter — prevents the collector from exhausting host memory
+  # Must come BEFORE batch in the pipeline.
+  memory_limiter:
+    check_interval: 5s
+    limit_mib: 256
+    spike_limit_mib: 64
+
+  # Batch processor — buffers data before forwarding to reduce overhead
+  batch:
+    timeout: 10s
+    send_batch_size: 1024
+
+  # Resource detection — stamps host/OS metadata onto every metric
+  resourcedetection:
+    detectors: [env, system]
+    timeout: 5s
+    override: false
+
+exporters:
+  # ── Prometheus ──────────────────────────────────────────────────────────────
+  # Exposes /metrics at :8889 for Prometheus to scrape
+  prometheus:
+    endpoint: 0.0.0.0:8889
+    namespace: otel                 # metrics prefixed otel_
+    send_timestamps: true
+    enable_open_metrics: true       # OpenMetrics format (better histogram support)
+
+  # ── Elasticsearch ───────────────────────────────────────────────────────────
+  # Writes every metric as a document into the otel-metrics-* data stream.
+  # Kibana reads from this index pattern.
+  elasticsearch:
+    endpoints: ["http://elasticsearch:9200"]
+
+    # v0.103.0 uses `index` — metrics_index/logs_index/traces_index not yet supported
+    index: otel-metrics
+
+    # OTel-native mapping: preserves full semantic-convention field names
+    # (e.g. resource.attributes.service.name, jvm.memory.used)
+    mapping:
+      mode: otel
+
+    # Retry on transient ES errors (max_elapsed_time not supported in v0.103.0)
+    retry:
+      enabled:          true
+      initial_interval: 100ms
+      max_interval:     30s
+
+    # Internal send queue
+    sending_queue:
+      enabled:       true
+      num_consumers: 4
+      queue_size:    100
+
+  # ── Debug ───────────────────────────────────────────────────────────────────
+  # Logs received metrics to collector stdout — handy during development
+  debug:
+    verbosity: basic
+
+extensions:
+  health_check:
+    endpoint: 0.0.0.0:13133       # GET http://localhost:13133 → 200 OK
+
+service:
+  extensions: [health_check]
+  pipelines:
+    metrics:
+      receivers:  [otlp]
+      processors: [memory_limiter, batch, resourcedetection]
+      exporters:  [prometheus, elasticsearch, debug]
